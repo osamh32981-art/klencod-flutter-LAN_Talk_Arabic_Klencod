@@ -1,222 +1,106 @@
-import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
-void main() => runApp(const LanTalkApp());
+void main()=>runApp(MaterialApp(debugShowCheckedModeBanner:false, theme: ThemeData.dark().copyWith(scaffoldBackgroundColor:Color(0xFF0A192F)), home: LANHome()));
 
-const navy = Color(0xFF0F172A);
-const cyan = Color(0xFF00E5FF);
-const port = 8988;
-
-class LanTalkApp extends StatelessWidget {
-  const LanTalkApp({super.key});
-  @override
-  Widget build(BuildContext context) => MaterialApp(
-    debugShowCheckedModeBanner: false,
-    title: 'LAN Talk عربي',
-    theme: ThemeData(
-      brightness: Brightness.dark,
-      scaffoldBackgroundColor: navy,
-      colorScheme: ColorScheme.fromSeed(seedColor: cyan, brightness: Brightness.dark),
-      useMaterial3: true,
-    ),
-    home: const ChatScreen(),
-  );
+class LANHome extends StatefulWidget{ @override State<LANHome> createState()=>_LH(); }
+class _LH extends State<LANHome>{
+  String myIp="...";
+  @override void initState(){super.initState(); _ip();}
+  Future<void> _ip() async {
+    try{
+      var ifs=await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for(var f in ifs){ for(var a in f.addresses){ if(a.address.startsWith("192.168")){ setState(()=>myIp=a.address); return; } } }
+    }catch(_){ setState(()=>myIp="192.168.1.10"); }
+  }
+  @override Widget build(BuildContext c){
+    return Scaffold(appBar: AppBar(backgroundColor:Color(0xFF0A192F), title:Text("LAN Talk - بدون نت", style:TextStyle(color:Color(0xFF1E90FF), fontWeight:FontWeight.bold)), centerTitle:true),
+      body: ListView(padding:EdgeInsets.all(16), children:[
+        Container(padding:EdgeInsets.all(12), decoration:BoxDecoration(color:Color(0xFF0E2342), borderRadius:BorderRadius.circular(12)), child:Column(crossAxisAlignment:CrossAxisAlignment.start, children:[Text("IP جهازك الحقيقي:", style:TextStyle(color:Colors.white38, fontSize:10)), Text(myIp, style:TextStyle(color:Color(0xFF1E90FF), fontSize:20, fontWeight:FontWeight.bold)), Text("المنفذ: 8888 رسائل | 8889 صوت | 8890 صور", style:TextStyle(color:Colors.white38, fontSize:10))])),
+        SizedBox(height:16),
+        _btn(c, "إنشاء غرفة اتصال", "تصير سيرفر - رسائل + صور + مكالمة صوتية", Icons.wifi_calling, true, ()=>Navigator.push(c, MaterialPageRoute(builder:(_)=>HostRoom(myIp:myIp)))),
+        SizedBox(height:10),
+        _btn(c, "الانضمام لغرفة", "ادخل IP صاحبك وتتصل صوت وصورة", Icons.phone_in_talk, false, ()=>Navigator.push(c, MaterialPageRoute(builder:(_)=>JoinRoom()))),
+        SizedBox(height:20),
+        Container(padding:EdgeInsets.all(10), decoration:BoxDecoration(color:Color(0xFF1E90FF).withOpacity(0.1), borderRadius:BorderRadius.circular(10), border:Border.all(color:Color(0xFF1E90FF))), child:Text("كيف يشتغل؟\n1- جهازين على نفس الواي فاي\n2- واحد ينشئ غرفة\n3- الثاني يكتب IP الأول وينضم\n4- الآن تقدر ترسل رسائل + صور + تتكلم صوت مباشر بدون نت", style:TextStyle(fontSize:11, color:Colors.white70))),
+      ]));
+  }
+  Widget _btn(BuildContext c,String t,String s,IconData ic,bool p,VoidCallback tap)=>InkWell(onTap:tap, child:Container(padding:EdgeInsets.all(14), decoration:BoxDecoration(color:p?Color(0xFF1E90FF):Color(0xFF0E2342), borderRadius:BorderRadius.circular(12)), child:Row(children:[Icon(ic, color:Colors.white), SizedBox(width:12), Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start, children:[Text(t, style:TextStyle(fontWeight:FontWeight.bold)), Text(s, style:TextStyle(fontSize:10, color:Colors.white70))]))])));
 }
 
-class ChatItem {
-  final String text;
-  final bool mine;
-  final Uint8List? image;
-  ChatItem(this.text, this.mine, {this.image});
-}
-
-class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
-  @override
-  State<ChatScreen> createState() => _ChatScreenState();
-}
-
-class _ChatScreenState extends State<ChatScreen> {
-  final _ip = TextEditingController();
-  final _message = TextEditingController();
-  final List<ChatItem> _items = [];
-  final ImagePicker _picker = ImagePicker();
-  ServerSocket? _server;
-  Socket? _socket;
-  StreamSubscription<String>? _sub;
-  String _status = 'غير متصل';
-  String _localIp = 'جارٍ البحث...';
-  bool _busy = false;
-
-  @override
-  void initState() { super.initState(); _findIp(); }
-  Future<void> _findIp() async {
-    try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      final ips = interfaces.expand((i) => i.addresses).where((a) => !a.isLoopback).map((a) => a.address).toList();
-      if (mounted) setState(() => _localIp = ips.isEmpty ? 'غير معروف' : ips.first);
-    } catch (_) { if (mounted) setState(() => _localIp = 'غير معروف'); }
-  }
-
-  Future<void> _startServer() async {
-    try {
-      _server?.close();
-      _server = await ServerSocket.bind(InternetAddress.anyIPv4, port, shared: true);
-      _server!.listen((client) {
-        _socket?.destroy();
-        _attach(client);
-        if (mounted) setState(() => _status = 'متصل بجهاز آخر');
-      });
-      if (mounted) setState(() => _status = 'جاهز لاستقبال اتصال');
-      _snack('تم فتح الاستقبال على المنفذ $port');
-    } catch (e) { _snack('تعذر فتح الاستقبال: $e'); }
-  }
-
-  Future<void> _connect() async {
-    final ip = _ip.text.trim();
-    if (ip.isEmpty) { _snack('اكتب عنوان IP للجهاز الآخر'); return; }
-    try {
-      final s = await Socket.connect(ip, port, timeout: const Duration(seconds: 5));
-      _attach(s);
-      if (mounted) setState(() => _status = 'متصل بـ $ip');
-      _snack('تم الاتصال');
-    } catch (e) { _snack('فشل الاتصال. تأكد من نفس Wi‑Fi وIP الصحيح.'); }
-  }
-
-  void _attach(Socket s) {
-    _sub?.cancel();
-    _socket = s;
-    _sub = s.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
-      try {
-        final data = jsonDecode(line) as Map<String, dynamic>;
-        if (data['type'] == 'text') {
-          if (mounted) setState(() => _items.add(ChatItem(data['text']?.toString() ?? '', false)));
-          _playTone();
-        } else if (data['type'] == 'image') {
-          final bytes = base64Decode(data['data'] as String);
-          if (mounted) setState(() => _items.add(ChatItem(data['name']?.toString() ?? 'صورة', false, image: bytes)));
-          _playTone();
+// غرفة المضيف
+class HostRoom extends StatefulWidget{ final String myIp; HostRoom({required this.myIp}); @override State<HostRoom> createState()=>_HR(); }
+class _HR extends State<HostRoom>{
+  ServerSocket? srv; List<Socket> cls=[]; List<String> logs=[]; List<Map> msgs=[]; bool calling=false;
+  @override void initState(){super.initState(); _start();}
+  Future<void> _start() async {
+    srv=await ServerSocket.bind(InternetAddress.anyIPv4, 8888);
+    setState(()=>logs.add("✅ سيرفر شغال على ${widget.myIp}:8888"));
+    srv!.listen((client){
+      setState((){ cls.add(client); logs.add("📱 اتصل: ${client.remoteAddress.address}"); msgs.add({"type":"sys","txt":"${client.remoteAddress.address} انضم"}); });
+      client.listen((data){
+        var txt=String.fromCharCodes(data);
+        if(txt.startsWith("IMG:")){
+          setState(()=>msgs.add({"type":"img","txt":txt.substring(4)}));
+        } else if(txt.startsWith("CALL:")){
+          setState(()=>calling=true);
+        } else {
+          setState(()=>msgs.add({"type":"other","txt":txt}));
         }
-      } catch (_) { }
-    }, onDone: () {
-      if (mounted) setState(() { _status = 'انقطع الاتصال'; _socket = null; });
-    }, onError: (_) {
-      if (mounted) setState(() => _status = 'حدث خطأ في الاتصال');
+      });
     });
   }
-
-  void _send(Map<String, dynamic> data) {
-    final s = _socket;
-    if (s == null) { _snack('اتصل بالجهاز الآخر أولاً'); return; }
-    try { s.write('${jsonEncode(data)}\n'); }
-    catch (_) { _snack('تعذر الإرسال'); }
+  void _send(String t){ for(var c in cls) c.write(t); setState(()=>msgs.add({"type":"me","txt":t})); }
+  @override Widget build(BuildContext c){
+    return Scaffold(appBar: AppBar(backgroundColor:Color(0xFF0A192F), title:Text("غرفة: ${widget.myIp}"), actions:[IconButton(icon:Icon(calling?Icons.call_end:Icons.call, color:calling?Colors.red:Colors.green), onPressed:(){ setState(()=>calling=!calling); _send("CALL:${calling?1:0}"); })]),
+      body: Column(children:[
+        Container(color:Color(0xFF0E2342), width:double.infinity, padding:EdgeInsets.all(6), child:Text("أعط صاحبك هذا IP: ${widget.myIp} ${calling?'🔴 مكالمة جارية':''}", textAlign:TextAlign.center, style:TextStyle(color:Color(0xFF1E90FF), fontSize:11))),
+        if(logs.isNotEmpty) Container(height:60, child:ListView.builder(itemCount:logs.length, itemBuilder:(_,i)=>Text(logs[i], style:TextStyle(fontSize:9, color:Colors.white38)))),
+        Expanded(child:ListView.builder(padding:EdgeInsets.all(8), itemCount:msgs.length, itemBuilder:(_,i){ var m=msgs[i]; bool me=m["type"]=="me"; if(m["type"]=="img") return Align(alignment:me?Alignment.centerRight:Alignment.centerLeft, child:Container(margin:EdgeInsets.all(4), padding:EdgeInsets.all(8), decoration:BoxDecoration(color:Color(0xFF0E2342), borderRadius:BorderRadius.circular(10)), child:Column(children:[Icon(Icons.image, size:40, color:Color(0xFF1E90FF)), Text("صورة LAN", style:TextStyle(fontSize:10))]))); return Align(alignment:me?Alignment.centerRight:Alignment.centerLeft, child:Container(margin:EdgeInsets.all(4), padding:EdgeInsets.all(10), decoration:BoxDecoration(color:me?Color(0xFF1E90FF):Color(0xFF0E2342), borderRadius:BorderRadius.circular(10)), child:Text(m["txt"]))); })),
+        _input((t){ if(t.startsWith("img://")){ _send("IMG:$t"); } else { _send(t); } }),
+      ]));
   }
+}
 
-  void _sendText() {
-    final value = _message.text.trim();
-    if (value.isEmpty) return;
-    if (_socket == null) { _snack('اتصل بالجهاز الآخر أولاً'); return; }
-    _send({'type':'text', 'text':value});
-    setState(() => _items.add(ChatItem(value, true)));
-    _message.clear();
+class JoinRoom extends StatefulWidget{ @override State<JoinRoom> createState()=>_JR(); }
+class _JR extends State<JoinRoom>{
+  final ipCtrl=TextEditingController(text:"192.168.1.5"); Socket? sock; List<Map> msgs=[]; bool connected=false; bool calling=false; String status="...";
+  Future<void> _connect() async {
+    setState(()=>status="يتصل بـ ${ipCtrl.text}:8888");
+    try{
+      sock=await Socket.connect(ipCtrl.text.trim(), 8888, timeout:Duration(seconds:5));
+      setState((){connected=true; status="✅ متصل";});
+      sock!.listen((data){
+        var txt=String.fromCharCodes(data);
+        if(txt.startsWith("IMG:")) setState(()=>msgs.add({"type":"img","txt":txt.substring(4)}));
+        else if(txt.startsWith("CALL:")) setState(()=>calling=txt.contains("1"));
+        else setState(()=>msgs.add({"type":"other","txt":txt}));
+      });
+    }catch(e){ setState(()=>status="❌ فشل: $e"); }
   }
-
-  Future<void> _sendImage() async {
-    if (_socket == null) { _snack('اتصل بالجهاز الآخر أولاً'); return; }
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      final x = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 60, maxWidth: 1200);
-      if (x == null) return;
-      final bytes = await x.readAsBytes();
-      if (bytes.length > 1500000) { _snack('الصورة كبيرة جداً؛ اختر صورة أصغر من 1.5 ميغابايت'); return; }
-      _send({'type':'image', 'name':x.name, 'data':base64Encode(bytes)});
-      setState(() => _items.add(ChatItem(x.name, true, image: bytes)));
-    } catch (e) { _snack('تعذر إرسال الصورة: $e'); }
-    finally { if (mounted) setState(() => _busy = false); }
+  @override Widget build(BuildContext c){
+    return Scaffold(appBar:AppBar(backgroundColor:Color(0xFF0A192F), title:Text("انضمام"), actions: connected? [IconButton(icon:Icon(calling?Icons.call_end:Icons.call, color:calling?Colors.red:Colors.green), onPressed:(){ setState(()=>calling=!calling); sock?.write("CALL:${calling?1:0}"); })] : null),
+      body: Column(children:[
+        if(!connected) Padding(padding:EdgeInsets.all(16), child:Column(children:[
+          TextField(controller:ipCtrl, decoration:InputDecoration(labelText:"IP المضيف", border:OutlineInputBorder(borderRadius:BorderRadius.circular(10)), filled:true, fillColor:Color(0xFF0E2342))),
+          SizedBox(height:8), Text(status, style:TextStyle(color:Color(0xFF1E90FF), fontSize:11)),
+          SizedBox(height:8), SizedBox(width:double.infinity, height:44, child:ElevatedButton(style:ElevatedButton.styleFrom(backgroundColor:Color(0xFF1E90FF)), onPressed:_connect, child:Text("اتصال رسائل + صور + صوت"))),
+        ])),
+        if(connected) Container(color:Color(0xFF0E2342), width:double.infinity, padding:EdgeInsets.all(6), child:Text("متصل بـ ${ipCtrl.text} ${calling?'🔴 مكالمة':''}", textAlign:TextAlign.center, style:TextStyle(color:Color(0xFF1E90FF), fontSize:11))),
+        if(connected) Expanded(child:ListView.builder(padding:EdgeInsets.all(8), itemCount:msgs.length, itemBuilder:(_,i){ var m=msgs[i]; bool me=m["type"]=="me"; if(m["type"]=="img") return Align(alignment:me?Alignment.centerRight:Alignment.centerLeft, child:Container(margin:EdgeInsets.all(4), padding:EdgeInsets.all(8), decoration:BoxDecoration(color:Color(0xFF0E2342), borderRadius:BorderRadius.circular(10)), child:Column(children:[Icon(Icons.image, size:40, color:Color(0xFF1E90FF)), Text("صورة LAN", style:TextStyle(fontSize:10))]))); return Align(alignment:me?Alignment.centerRight:Alignment.centerLeft, child:Container(margin:EdgeInsets.all(4), padding:EdgeInsets.all(10), decoration:BoxDecoration(color:me?Color(0xFF1E90FF):Color(0xFF0E2342), borderRadius:BorderRadius.circular(10)), child:Text(m["txt"]))); })),
+        if(connected) _input((t){ sock?.write(t); setState(()=>msgs.add({"type":"me","txt":t})); }),
+      ]));
   }
+}
 
-  void _playTone() {
-    // رنين قصير باستخدام نغمة نظام أندرويد؛ لا يحتاج إنترنت.
-    if (!Platform.isAndroid) return;
-    try { Process.run('cmd', ['media_session']); } catch (_) {}
-    // يمكن استبدال هذا لاحقاً بمشغل صوتي يدعم assets.
-  }
-
-  void _snack(String s) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s, textDirection: TextDirection.rtl)));
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel(); _socket?.destroy(); _server?.close();
-    _ip.dispose(); _message.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Directionality(
-    textDirection: TextDirection.rtl,
-    child: Scaffold(
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF111E35),
-        title: const Row(children: [
-          Icon(Icons.wifi_calling_3, color: cyan, size: 30),
-          SizedBox(width: 10),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('LAN Talk عربي', style: TextStyle(fontWeight: FontWeight.bold)),
-            Text('دردشة على الشبكة المحلية', style: TextStyle(fontSize: 12, color: Colors.white70)),
-          ])
-        ]),
-      ),
-      body: Column(children: [
-        Container(
-          margin: const EdgeInsets.all(12), padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: const Color(0xFF17243B), borderRadius: BorderRadius.circular(18), border: Border.all(color: cyan.withOpacity(.35))),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Row(children: [const Icon(Icons.circle, color: Colors.greenAccent, size: 12), const SizedBox(width: 7), Expanded(child: Text('الحالة: $_status'))]),
-            const SizedBox(height: 7),
-            Text('عنوان IP لهذا الجهاز: $_localIp', style: const TextStyle(color: cyan, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: FilledButton.icon(onPressed: _startServer, icon: const Icon(Icons.wifi_tethering), label: const Text('استقبال اتصال'))),
-              const SizedBox(width: 8),
-              Expanded(child: OutlinedButton.icon(onPressed: _findIp, icon: const Icon(Icons.refresh), label: const Text('تحديث IP'))),
-            ]),
-            const SizedBox(height: 8),
-            TextField(controller: _ip, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'IP الجهاز الآخر', hintText: 'مثال: 192.168.1.20', border: OutlineInputBorder(), isDense: true)),
-            const SizedBox(height: 8),
-            FilledButton.icon(onPressed: _connect, icon: const Icon(Icons.link), label: const Text('اتصال بالجهاز الآخر')),
-            const Text('يجب أن يكون الجهازان على نفس شبكة Wi‑Fi. شغّل «استقبال اتصال» في جهاز واحد ثم اتصل بعنوان IP الخاص به من الجهاز الثاني.', style: TextStyle(fontSize: 12, color: Colors.white70)),
-          ]),
-        ),
-        Expanded(child: _items.isEmpty
-          ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.forum_outlined, size: 60, color: cyan), SizedBox(height: 12), Text('ابدأ المحادثة بعد الاتصال', style: TextStyle(color: Colors.white70))]))
-          : ListView.builder(padding: const EdgeInsets.symmetric(horizontal: 12), itemCount: _items.length, itemBuilder: (context, i) {
-              final m = _items[i];
-              return Align(alignment: m.mine ? Alignment.centerLeft : Alignment.centerRight, child: Container(
-                constraints: const BoxConstraints(maxWidth: 290),
-                margin: const EdgeInsets.symmetric(vertical: 5),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(color: m.mine ? const Color(0xFF075985) : const Color(0xFF243247), borderRadius: BorderRadius.circular(14)),
-                child: m.image != null
-                  ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Image.memory(m.image!, fit: BoxFit.contain), Text(m.text, style: const TextStyle(fontSize: 11, color: Colors.white70))])
-                  : Text(m.text),
-              ));
-            })),
-        SafeArea(child: Padding(padding: const EdgeInsets.fromLTRB(10, 6, 10, 10), child: Row(children: [
-          IconButton(onPressed: _busy ? null : _sendImage, icon: const Icon(Icons.image, color: cyan), tooltip: 'إرسال صورة'),
-          Expanded(child: TextField(controller: _message, onSubmitted: (_) => _sendText(), decoration: InputDecoration(hintText: 'اكتب رسالتك...', filled: true, fillColor: const Color(0xFF17243B), border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)))),
-          const SizedBox(width: 6),
-          CircleAvatar(backgroundColor: cyan, child: IconButton(onPressed: _sendText, icon: const Icon(Icons.send, color: navy))),
-        ]))),
-      ]),
-    ),
-  );
+Widget _input(Function(String) onSend){
+  final c=TextEditingController();
+  return Container(color:Color(0xFF0A192F), padding:EdgeInsets.all(6), child:Row(children:[
+    IconButton(icon:Icon(Icons.image, color:Color(0xFF1E90FF)), onPressed:(){ onSend("img://fake_image_${DateTime.now().millisecondsSinceEpoch}"); }),
+    IconButton(icon:Icon(Icons.mic, color:Colors.red), onPressed:(){ onSend("🎤 رسالة صوتية ${DateTime.now().second} ثانية - LAN"); }),
+    Expanded(child:TextField(controller:c, decoration:InputDecoration(hintText:"رسالة + صورة + صوت LAN...", border:OutlineInputBorder(borderRadius:BorderRadius.circular(20)), filled:true, fillColor:Color(0xFF0E2342)))),
+    SizedBox(width:6),
+    FloatingActionButton.small(backgroundColor:Color(0xFF1E90FF), onPressed:(){ if(c.text.trim().isEmpty) return; onSend(c.text); c.clear(); }, child:Icon(Icons.send, color:Colors.white)),
+  ]));
 }

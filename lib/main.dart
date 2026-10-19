@@ -9,8 +9,15 @@ class _AppS extends State<App>{
   Future<void> _getIp() async {
     try{
       var list=await NetworkInterface.list(type: InternetAddressType.IPv4);
-      for(var i in list){ for(var a in i.addresses){ if(a.address.startsWith("192.168")){ setState(()=>ip=a.address); return; } } }
-    }catch(_){}
+      for(var i in list){ for(var a in i.addresses){ if(a.address.startsWith("192.168")){
+          setState(()=>ip=a.address);
+          return;
+        }
+      }
+    }
+    }catch(e){
+      print("Error getting IP: $e");
+    }
   }
   @override Widget build(BuildContext c){
     return Scaffold(appBar:AppBar(backgroundColor:Color(0xFF0A192F), title:Text("LAN صوت وصورة ورسائل", style:TextStyle(color:Color(0xFF1E90FF), fontWeight:FontWeight.bold)), centerTitle:true),
@@ -22,8 +29,7 @@ class _AppS extends State<App>{
         _b(c, "الانضمام", "ادخل IP صاحبك", Icons.search, false, ()=>Navigator.push(c, MaterialPageRoute(builder:(_)=>Room(ip:ip, isHost:false)))),
       ]));
   }
-  Widget _b(BuildContext c,String t,String s,IconData ic,bool p,VoidCallback f)=>InkWell(onTap:f, child:Container(padding:EdgeInsets.all(14), decoration:BoxDecoration(color:p?Color(0xFF1E90FF):Color(0xFF0E2342), borderRadius:BorderRadius.circular(12)), child:Row(children:[Icon(ic), SizedBox(width:12), Column(crossAxisAlignment:CrossAxisAlignment.start, children:[Text(t, style:TextStyle(fontWeight:FontWeight.bold)), Text(s, style:TextStyle(fontSize:10, color:Colors.white70))])])));
-}
+  Widget _b(BuildContext c,String t,String s,IconData ic,bool p,VoidCallback f)=>InkWell(onTap:f, child:Container(padding:EdgeInsets.all(14), decoration:BoxDecoration(color:p?Color(0xFF1E90FF):Color(0xFF0E2342), borderRadius:BorderRadius.circular(12)), child:Row(children:[Icon(ic), SizedBox(width:12), Column(crossAxisAlignment:CrossAxisAlignment.start, children:[Text(t, style:TextStyle(fontWeight:FontWeight.bold)), Text(s, style:TextStyle(fontSize:10, color:Colors.white70))])])));}
 
 class Room extends StatefulWidget{ final String ip; final bool isHost; Room({required this.ip, required this.isHost}); @override State<Room> createState()=>_RoomS(); }
 class _RoomS extends State<Room>{
@@ -52,11 +58,21 @@ class _RoomS extends State<Room>{
     }catch(e){ setState(()=>log="فشل: $e"); }
   }
 
-  void _send(String t){ client?.write(t); if(server!=null){ for(var c in [client]){ c?.write(t); } } setState(()=>msgs.add("أنت: $t")); }
+  void _send(String t){ 
+    if (client != null) {
+      client!.write(t);
+      if(server!=null){ for(var c in [client]){ c?.write(t); } }
+      setState(()=>msgs.add("أنت: $t"));
+    }
+  }
 
   @override Widget build(BuildContext c){
     return Scaffold(appBar:AppBar(backgroundColor:Color(0xFF0A192F), title:Text(widget.isHost?"أنت السيرفر ${widget.ip}":"انضمام"), actions:[IconButton(icon:Icon(call?Icons.call_end:Icons.call, color:call?Colors.red:Colors.green), onPressed:(){ setState(()=>call=!call); _send(call?"🔴 بدأ مكالمة صوتية LAN":"🔴 أنهى المكالمة"); })]),
       body:Column(children:[
         Container(color:Color(0xFF0E2342), width:double.infinity, padding:EdgeInsets.all(6), child:Text(log.isEmpty?"IP: ${widget.ip}":log, textAlign:TextAlign.center, style:TextStyle(color:Color(0xFF1E90FF), fontSize:11))),
         if(!widget.isHost) Padding(padding:EdgeInsets.all(8), child:Row(children:[Expanded(child:TextField(controller:ipCtrl, decoration:InputDecoration(labelText:"IP المضيف", border:OutlineInputBorder(), filled:true, fillColor:Color(0xFF0E2342)))), SizedBox(width:6), ElevatedButton(style:ElevatedButton.styleFrom(backgroundColor:Color(0xFF1E90FF)), onPressed:_join, child:Text("اتصال"))])),
-        if(call) Container(color:Colors.red.with
+        if(call) Container(color:Colors.red.withOpacity(0.5), height:50, child: Center(child: Text("مكالمة صوتية نشطة", style: TextStyle(color: Colors.white)))),
+        Expanded(child: ListView.builder(itemCount: msgs.length, itemBuilder: (context, index) => ListTile(title: Text(msgs[index])))),
+      ]));
+  }
+}

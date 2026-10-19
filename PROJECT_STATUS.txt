@@ -1,0 +1,1 @@
+LAN Talk Arabic Flutter starter. Text and small image transfer over LAN implemented. Voice/video calling and automatic playback of WAV tone are not implemented in this starter.
